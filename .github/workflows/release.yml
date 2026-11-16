@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-15
+    runs-on: xcode-27 # needs the macOS 27 SDK
     steps:
       - uses: actions/checkout@v4
 
