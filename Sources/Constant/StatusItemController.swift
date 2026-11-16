@@ -34,12 +34,13 @@ final class StatusItemController: NSObject {
 
         let pluginItem = NSMenuItem(title: "Instrument", action: nil, keyEquivalent: "")
         pluginItem.submenu = pluginMenu
+        setIcon("pianokeys", on: pluginItem)
         menu.addItem(pluginItem)
         menu.addItem(.separator())
-        menu.addItem(makeItem("Settings", #selector(openSettings), key: ","))
-        menu.addItem(makeItem("About", #selector(openAbout)))
+        menu.addItem(makeItem("Settings", #selector(openSettings), key: ",", icon: "gearshape"))
+        menu.addItem(makeItem("About", #selector(openAbout), icon: "info.circle"))
         menu.addItem(.separator())
-        menu.addItem(makeItem("Quit", #selector(quit), key: "q"))
+        menu.addItem(makeItem("Quit", #selector(quit), key: "q", icon: "power"))
 
         shortcuts.onToggle = { [weak self] in
             guard let self, let button = self.statusItem.button else { return }
@@ -58,10 +59,19 @@ final class StatusItemController: NSObject {
         instrumentChanged()
     }
 
-    private func makeItem(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
+    private func makeItem(
+        _ title: String, _ action: Selector, key: String = "", icon: String? = nil
+    ) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
+        if let icon { setIcon(icon, on: item) }
         return item
+    }
+
+    private func setIcon(_ symbolName: String, on item: NSMenuItem) {
+        item.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+        // macOS 27 hides menu item images unless the item asks for them.
+        if #available(macOS 27.0, *) { item.preferredImageVisibility = .visible }
     }
 
     private func instrumentChanged() {

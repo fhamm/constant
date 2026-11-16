@@ -1,3 +1,5 @@
+<img src="Resources/icon.png" width="128" alt="Constant icon">
+
 # Constant
 
 A macOS menu bar host for virtual instruments. It keeps one Audio Unit instrument (Omnisphere, Keyscape, Arturia and so on) loaded and playable from your MIDI keyboard, without opening a DAW.
