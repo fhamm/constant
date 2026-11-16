@@ -25,11 +25,20 @@ A macOS menu bar host for virtual instruments. It keeps one Audio Unit instrumen
 
 1. Download `Constant-x.y.z.dmg` from the [latest release](https://github.com/fhamm/constant/releases/latest).
 2. Open it and drag Constant to Applications.
-3. The app is not notarized, so macOS blocks the first launch. Open it once, then go to System Settings > Privacy & Security and click **Open Anyway**. Or run:
+3. Open Constant. The first launch is blocked, see below.
+
+### "Apple could not verify Constant is free of malware"
+
+macOS shows this warning on the first launch because the app is not notarized by Apple. To get past it, do one of these once:
+
+- Click **Done** on the dialog, open System Settings > Privacy & Security, scroll down to the message about Constant and click **Open Anyway**.
+- Or run this in Terminal:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/Constant.app
 ```
+
+After that the app opens normally.
 
 ## Build
 
