@@ -3,7 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var host: InstrumentHost
     @ObservedObject var midi: MIDIInput
-    @AppStorage(PanelPosition.defaultsKey) private var panelPosition = PanelPosition.menuBarIcon
+    @ObservedObject var shortcuts: ToggleShortcuts
 
     private static let bufferSizes = [64, 128, 256, 512, 1024]
 
@@ -31,10 +31,31 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Window") {
-                Picker("Position", selection: $panelPosition) {
-                    ForEach(PanelPosition.allCases) { position in
-                        Text(position.title).tag(position)
+            Section("Show / Hide Plugin") {
+                LabeledContent("Hotkey") {
+                    HStack {
+                        Text(shortcuts.hotKey?.display ?? "None").foregroundStyle(.secondary)
+                        Button(shortcuts.isRecordingHotKey ? "Press keys..." : "Record") {
+                            shortcuts.toggleHotKeyRecording()
+                        }
+                        if shortcuts.hotKey != nil {
+                            Button("Clear") { shortcuts.clearHotKey() }
+                        }
+                    }
+                }
+                if let error = shortcuts.hotKeyError {
+                    Text(error).foregroundStyle(.red)
+                }
+
+                LabeledContent("MIDI command") {
+                    HStack {
+                        Text(shortcuts.midiDescription ?? "None").foregroundStyle(.secondary)
+                        Button(shortcuts.isLearningMIDI ? "Waiting for MIDI..." : "Learn") {
+                            shortcuts.toggleMIDILearn()
+                        }
+                        if shortcuts.midiBinding != nil {
+                            Button("Clear") { shortcuts.clearMIDI() }
+                        }
                     }
                 }
             }

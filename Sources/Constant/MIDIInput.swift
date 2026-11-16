@@ -16,6 +16,7 @@ final class MIDIInput: ObservableObject {
     @Published private(set) var enabledIDs: Set<Int32>
 
     private let sink: MIDISink
+    private let trigger: MIDITrigger
     private var client = MIDIClientRef()
     private var port = MIDIPortRef()
     private var connected: [MIDIEndpointRef] = []
@@ -23,8 +24,9 @@ final class MIDIInput: ObservableObject {
     private static let allKey = "midiListenToAll"
     private static let enabledKey = "midiEnabledInputs"
 
-    init(sink: MIDISink) {
+    init(sink: MIDISink, trigger: MIDITrigger) {
         self.sink = sink
+        self.trigger = trigger
         let defaults = UserDefaults.standard
         listenToAll = defaults.object(forKey: Self.allKey) as? Bool ?? true
         let saved = defaults.array(forKey: Self.enabledKey) as? [Int] ?? []
@@ -37,8 +39,9 @@ final class MIDIInput: ObservableObject {
             DispatchQueue.main.async { self?.refresh() }
         }
         let sink = self.sink
+        let trigger = self.trigger
         MIDIInputPortCreateWithProtocol(client, "Constant Input" as CFString, ._1_0, &port) { list, _ in
-            MIDIInput.forward(list, to: sink)
+            MIDIInput.forward(list, to: sink, trigger: trigger)
         }
         refresh()
     }
@@ -85,7 +88,9 @@ final class MIDIInput: ObservableObject {
 
     // MARK: - Receiving (CoreMIDI thread)
 
-    nonisolated private static func forward(_ list: UnsafePointer<MIDIEventList>, to sink: MIDISink) {
+    nonisolated private static func forward(
+        _ list: UnsafePointer<MIDIEventList>, to sink: MIDISink, trigger: MIDITrigger
+    ) {
         let wordsOffset = MemoryLayout<MIDIEventPacket>.offset(of: \.words)!
 
         for packet in list.unsafeSequence() {
@@ -105,8 +110,11 @@ final class MIDIInput: ObservableObject {
                     var message = (status, UInt8((word >> 8) & 0x7F), UInt8(word & 0x7F))
                     let kind = status & 0xF0
                     let length = (kind == 0xC0 || kind == 0xD0) ? 2 : 3
-                    withUnsafeBytes(of: &message) { raw in
-                        sink.send(raw.bindMemory(to: UInt8.self).baseAddress!, count: length)
+                    // The show/hide trigger keeps its own message away from the instrument.
+                    if !trigger.handle(status: status, data1: message.1, data2: message.2) {
+                        withUnsafeBytes(of: &message) { raw in
+                            sink.send(raw.bindMemory(to: UInt8.self).baseAddress!, count: length)
+                        }
                     }
                 }
 

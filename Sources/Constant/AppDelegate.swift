@@ -13,16 +13,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let host: InstrumentHost
     private let midi: MIDIInput
+    private let shortcuts: ToggleShortcuts
     private var statusItem: StatusItemController?
 
     override init() {
         host = InstrumentHost()
-        midi = MIDIInput(sink: host.midiSink)
+        shortcuts = ToggleShortcuts()
+        midi = MIDIInput(sink: host.midiSink, trigger: shortcuts.midiTrigger)
         super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem = StatusItemController(host: host, midi: midi)
+        statusItem = StatusItemController(host: host, midi: midi, shortcuts: shortcuts)
         midi.start()
 
         host.restoreSession()

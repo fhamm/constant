@@ -6,7 +6,7 @@ final class KeyPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
-/// Shows the hosted instrument's editor in a panel anchored under the menu bar icon.
+/// Shows the hosted instrument's editor in a panel placed at the chosen screen location.
 @MainActor
 final class PluginPanelController {
     var onOpenSettings: (() -> Void)?
@@ -141,7 +141,6 @@ final class PluginPanelController {
 
     private func reposition() {
         guard let itemWindow = anchor?.window else { return }
-        let item = itemWindow.frame
         let size = panel.frame.size
         let margin: CGFloat = 8
 
@@ -154,9 +153,6 @@ final class PluginPanelController {
 
         let origin: NSPoint
         switch PanelPosition.current {
-        case .menuBarIcon:
-            let x = max(left, min(item.midX - size.width / 2, right))
-            origin = NSPoint(x: x, y: item.minY - size.height - 6)
         case .center:
             origin = NSPoint(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2)
         case .topLeft: origin = NSPoint(x: left, y: top)
@@ -171,19 +167,29 @@ final class PluginPanelController {
 
 /// Where the plugin panel appears on screen.
 enum PanelPosition: String, CaseIterable, Identifiable {
-    case menuBarIcon, center, topLeft, topRight, bottomLeft, bottomRight
+    case topRight, topLeft, center, bottomLeft, bottomRight
 
     static let defaultsKey = "panelPosition"
 
     static var current: PanelPosition {
-        UserDefaults.standard.string(forKey: defaultsKey).flatMap(PanelPosition.init) ?? .menuBarIcon
+        UserDefaults.standard.string(forKey: defaultsKey).flatMap(PanelPosition.init) ?? .topRight
     }
 
     var id: String { rawValue }
 
+    /// SF Symbol shown next to the position in the context menu.
+    var symbolName: String {
+        switch self {
+        case .center: return "rectangle.center.inset.filled"
+        case .topLeft: return "rectangle.inset.topleft.filled"
+        case .topRight: return "rectangle.inset.topright.filled"
+        case .bottomLeft: return "rectangle.inset.bottomleft.filled"
+        case .bottomRight: return "rectangle.inset.bottomright.filled"
+        }
+    }
+
     var title: String {
         switch self {
-        case .menuBarIcon: return "Below Menu Bar Icon"
         case .center: return "Center"
         case .topLeft: return "Top Left"
         case .topRight: return "Top Right"
