@@ -18,8 +18,18 @@ A macOS menu bar host for virtual instruments. It keeps one Audio Unit instrumen
 ## Requirements
 
 - macOS 13 or later
-- Xcode Command Line Tools (`xcode-select --install`)
 - Instruments installed as Audio Units. VST is not supported.
+- To build from source: Xcode Command Line Tools (`xcode-select --install`)
+
+## Install
+
+1. Download `Constant-x.y.z.dmg` from the [latest release](https://github.com/fhamm/constant/releases/latest).
+2. Open it and drag Constant to Applications.
+3. The app is not notarized, so macOS blocks the first launch. Open it once, then go to System Settings > Privacy & Security and click **Open Anyway**. Or run:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Constant.app
+```
 
 ## Build
 
@@ -31,6 +41,15 @@ open build/Constant.app
 The script builds with SwiftPM, assembles `build/Constant.app` and signs it ad hoc. Full Xcode is not needed.
 
 For daily use, copy `build/Constant.app` to `/Applications`. Start at Login points at the app's location, so enable it from the copy you actually run.
+
+## Release
+
+```sh
+./scripts/make-dmg.sh              # local disk image in build/
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Pushing a `v*` tag runs the Release workflow, which builds a universal disk image, takes the version from the tag and publishes it as a GitHub release.
 
 ## Usage
 
