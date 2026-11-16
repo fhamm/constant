@@ -9,8 +9,6 @@ final class KeyPanel: NSPanel {
 /// Shows the hosted instrument's editor in a panel placed at the chosen screen location.
 @MainActor
 final class PluginPanelController {
-    var onOpenSettings: (() -> Void)?
-
     private let host: InstrumentHost
     private let panel: KeyPanel
     private weak var anchor: NSView?
@@ -69,16 +67,17 @@ final class PluginPanelController {
         clearPluginView()
 
         if host.isLoading {
-            showMessage("Loading \(host.current?.name ?? "instrument")...", showSettings: false)
+            showMessage("Loading \(host.current?.name ?? "plugin")...")
         } else if !host.isReady {
-            showMessage(host.errorMessage ?? "No instrument selected.", showSettings: true)
+            showMessage(host.errorMessage
+                ?? "No instrument selected.\nRight click the menu bar icon to choose one.")
         } else {
             host.requestViewController { [weak self] viewController in
                 guard let self, token == self.reloadToken else { return }
                 if let viewController {
                     self.install(viewController)
                 } else {
-                    self.showMessage("This instrument has no interface.", showSettings: true)
+                    self.showMessage("This plugin has no interface.")
                 }
             }
         }
@@ -91,10 +90,8 @@ final class PluginPanelController {
         pluginViewController = nil
     }
 
-    private func showMessage(_ message: String, showSettings: Bool) {
-        let view = NSHostingView(rootView: MessageView(
-            message: message,
-            openSettings: showSettings ? { [weak self] in self?.onOpenSettings?() } : nil))
+    private func showMessage(_ message: String) {
+        let view = NSHostingView(rootView: MessageView(message: message))
         let size = view.fittingSize
         view.frame = NSRect(origin: .zero, size: size)
         panel.contentView = view
@@ -177,7 +174,7 @@ enum PanelPosition: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// SF Symbol shown next to the position in the context menu.
+    /// SF Symbol shown next to the position in Settings.
     var symbolName: String {
         switch self {
         case .center: return "rectangle.center.inset.filled"
@@ -201,7 +198,6 @@ enum PanelPosition: String, CaseIterable, Identifiable {
 
 private struct MessageView: View {
     let message: String
-    let openSettings: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 12) {
@@ -211,9 +207,6 @@ private struct MessageView: View {
             Text(message)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            if let openSettings {
-                Button("Open Settings...", action: openSettings)
-            }
         }
         .padding(24)
         .frame(width: 320)

@@ -4,6 +4,7 @@ struct AudioDevice: Identifiable, Hashable {
     let id: AudioDeviceID
     let uid: String
     let name: String
+    let outputChannels: Int
 }
 
 enum AudioDevices {
@@ -26,11 +27,12 @@ enum AudioDevices {
         guard AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &ids) == noErr else { return [] }
 
         return ids.compactMap { id in
-            guard hasOutput(id),
+            let channels = outputChannelCount(id)
+            guard channels > 0,
                   let uid = string(kAudioDevicePropertyDeviceUID, of: id),
                   let name = string(kAudioObjectPropertyName, of: id)
             else { return nil }
-            return AudioDevice(id: id, uid: uid, name: name)
+            return AudioDevice(id: id, uid: uid, name: name, outputChannels: channels)
         }
     }
 
@@ -53,19 +55,19 @@ enum AudioDevices {
         AudioObjectSetPropertyData(device, &addr, 0, nil, size, &value)
     }
 
-    private static func hasOutput(_ id: AudioDeviceID) -> Bool {
+    private static func outputChannelCount(_ id: AudioDeviceID) -> Int {
         var addr = address(kAudioDevicePropertyStreamConfiguration, scope: kAudioDevicePropertyScopeOutput)
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0
-        else { return false }
+        else { return 0 }
 
         let raw = UnsafeMutableRawPointer.allocate(
             byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
         defer { raw.deallocate() }
-        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return false }
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return 0 }
 
         let buffers = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
-        return buffers.contains { $0.mNumberChannels > 0 }
+        return buffers.reduce(0) { $0 + Int($1.mNumberChannels) }
     }
 
     private static func string(_ selector: AudioObjectPropertySelector, of id: AudioDeviceID) -> String? {

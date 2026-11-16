@@ -49,6 +49,10 @@ final class InstrumentHost: ObservableObject {
     @Published private(set) var outputDevices: [AudioDevice] = []
     @Published private(set) var outputDeviceUID: String
     @Published private(set) var bufferSize: Int
+    /// Output channels of the device the engine plays through.
+    @Published private(set) var outputChannelCount = 2
+    /// Stereo pair the instrument plays on: 0 is channels 1-2, 1 is 3-4, and so on.
+    @Published private(set) var outputPair = 0
 
     nonisolated let midiSink = MIDISink()
 
@@ -61,9 +65,11 @@ final class InstrumentHost: ObservableObject {
     private var unit: AVAudioUnit?
     private var loadToken = 0
     private var overrodeDevice = false
+    private var activeDeviceUID = ""
 
     private static let deviceKey = "outputDeviceUID"
     private static let bufferKey = "bufferSize"
+    private static let pairsKey = "outputChannelPairs"
 
     private static let sessionURL: URL = {
         let dir = FileManager.default
@@ -102,6 +108,17 @@ final class InstrumentHost: ObservableObject {
 
     func refreshOutputDevices() {
         outputDevices = AudioDevices.outputDevices()
+
+        // Channel count and saved channel pair of the device in use. The pair is stored per device.
+        let id = outputDevices.first { $0.uid == outputDeviceUID }?.id
+            ?? AudioDevices.defaultOutputDevice()
+        let device = outputDevices.first { $0.id == id }
+        activeDeviceUID = device?.uid ?? ""
+        outputChannelCount = device?.outputChannels ?? 2
+
+        let pairs = UserDefaults.standard.dictionary(forKey: Self.pairsKey) as? [String: Int]
+        let saved = pairs?[activeDeviceUID] ?? 0
+        outputPair = saved >= 0 && saved * 2 + 1 < outputChannelCount ? saved : 0
     }
 
     // MARK: - Loading
@@ -165,10 +182,14 @@ final class InstrumentHost: ObservableObject {
         let format = AVAudioFormat(
             standardFormatWithSampleRate: hardwareRate > 0 ? hardwareRate : 44100, channels: 2)
         engine.connect(unit, to: engine.mainMixerNode, format: format)
+        // Keep the output stereo so the channel map can place it on any pair of the device.
+        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: format)
+        applyChannelMap()
 
         do {
             engine.prepare()
             try engine.start()
+            applyChannelMap()
             midiSink.set(unit.auAudioUnit.scheduleMIDIEventBlock)
             errorMessage = nil
         } catch {
@@ -207,11 +228,32 @@ final class InstrumentHost: ObservableObject {
         }
     }
 
+    /// Routes the stereo signal to the selected pair of device channels.
+    private func applyChannelMap() {
+        guard outputChannelCount >= 2, let outputUnit = engine.outputNode.audioUnit else { return }
+        var map = [Int32](repeating: -1, count: outputChannelCount)
+        map[outputPair * 2] = 0
+        map[outputPair * 2 + 1] = 1
+        AudioUnitSetProperty(
+            outputUnit, kAudioOutputUnitProperty_ChannelMap, kAudioUnitScope_Global, 0,
+            &map, UInt32(map.count * MemoryLayout<Int32>.size))
+    }
+
     func setOutputDevice(uid: String) {
         guard uid != outputDeviceUID else { return }
         outputDeviceUID = uid
         UserDefaults.standard.set(uid, forKey: Self.deviceKey)
+        refreshOutputDevices()
         startEngine()
+    }
+
+    func setOutputPair(_ pair: Int) {
+        guard pair != outputPair, pair >= 0, pair * 2 + 1 < outputChannelCount else { return }
+        outputPair = pair
+        var pairs = UserDefaults.standard.dictionary(forKey: Self.pairsKey) as? [String: Int] ?? [:]
+        pairs[activeDeviceUID] = pair
+        UserDefaults.standard.set(pairs, forKey: Self.pairsKey)
+        applyChannelMap()
     }
 
     func setBufferSize(_ frames: Int) {

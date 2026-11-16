@@ -1,18 +1,5 @@
 import AppKit
-import ServiceManagement
 import SwiftUI
-
-/// Settings window that closes on Cmd+, (the app has no main menu to handle shortcuts).
-final class SettingsWindow: NSWindow {
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if modifiers == .command, event.charactersIgnoringModifiers == "," {
-            close()
-            return true
-        }
-        return super.performKeyEquivalent(with: event)
-    }
-}
 
 /// Menu bar icon: left click toggles the plugin panel, right click opens the context menu.
 @MainActor
@@ -24,8 +11,9 @@ final class StatusItemController: NSObject {
     private let panel: PluginPanelController
     private let menu = NSMenu()
     private var settingsWindow: NSWindow?
-    private let positionMenu = NSMenu()
-    private lazy var loginItem = makeItem("Start at Login", #selector(toggleStartAtLogin))
+    private let pluginMenu = NSMenu()
+    private var keyMonitor: Any?
+    private let login = LoginItem()
 
     init(host: InstrumentHost, midi: MIDIInput, shortcuts: ToggleShortcuts) {
         self.host = host
@@ -44,32 +32,29 @@ final class StatusItemController: NSObject {
             button.sendAction(on: [.leftMouseDown, .rightMouseDown])
         }
 
-        menu.addItem(loginItem)
-        menu.addItem(.separator())
-
-        let positionItem = NSMenuItem(title: "Location", action: nil, keyEquivalent: "")
-        for position in PanelPosition.allCases {
-            let item = makeItem(position.title, #selector(selectPosition(_:)))
-            item.representedObject = position.rawValue
-            item.image = NSImage(systemSymbolName: position.symbolName, accessibilityDescription: nil)
-            // macOS 27 hides menu item images unless the item asks for them.
-            if #available(macOS 27.0, *) { item.preferredImageVisibility = .visible }
-            positionMenu.addItem(item)
-        }
-        positionItem.submenu = positionMenu
-        menu.addItem(positionItem)
+        let pluginItem = NSMenuItem(title: "Instrument", action: nil, keyEquivalent: "")
+        pluginItem.submenu = pluginMenu
+        menu.addItem(pluginItem)
         menu.addItem(.separator())
         menu.addItem(makeItem("Settings", #selector(openSettings), key: ","))
         menu.addItem(makeItem("About", #selector(openAbout)))
         menu.addItem(.separator())
         menu.addItem(makeItem("Quit", #selector(quit), key: "q"))
 
-        panel.onOpenSettings = { [weak self] in self?.openSettings() }
         shortcuts.onToggle = { [weak self] in
             guard let self, let button = self.statusItem.button else { return }
             self.panel.toggle(relativeTo: button)
         }
         host.onInstrumentChanged = { [weak self] in self?.instrumentChanged() }
+
+        // The app has no main menu, so Cmd+, is handled here for whichever of our windows is
+        // focused, including the plugin panel.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard modifiers == .command, event.charactersIgnoringModifiers == "," else { return event }
+            let handled = MainActor.assumeIsolated { self?.toggleSettings() ?? false }
+            return handled ? nil : event
+        }
         instrumentChanged()
     }
 
@@ -92,11 +77,7 @@ final class StatusItemController: NSObject {
             || event?.modifierFlags.contains(.control) == true
 
         if isRightClick {
-            loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-            let currentPosition = PanelPosition.current.rawValue
-            for item in positionMenu.items {
-                item.state = item.representedObject as? String == currentPosition ? .on : .off
-            }
+            rebuildPluginMenu()
             // Attach the menu only for this click so left click keeps its own action.
             statusItem.menu = menu
             sender.performClick(nil)
@@ -106,16 +87,27 @@ final class StatusItemController: NSObject {
         }
     }
 
+    /// Cmd+, opens Settings, or closes it when it is already focused.
+    private func toggleSettings() -> Bool {
+        // Let the hotkey recorder capture the keys instead.
+        guard !shortcuts.isRecordingHotKey else { return false }
+        if let settingsWindow, settingsWindow.isKeyWindow {
+            settingsWindow.close()
+        } else {
+            openSettings()
+        }
+        return true
+    }
+
     @objc private func openSettings() {
-        host.refreshInstruments()
         host.refreshOutputDevices()
         midi.refresh()
 
         if settingsWindow == nil {
-            let controller = NSHostingController(rootView: SettingsView(host: host, midi: midi, shortcuts: shortcuts))
-            // Let the window grow and shrink with the MIDI input list.
+            let controller = NSHostingController(rootView: SettingsView(
+                host: host, midi: midi, shortcuts: shortcuts, login: login))
             controller.sizingOptions = [.preferredContentSize]
-            let window = SettingsWindow(contentViewController: controller)
+            let window = NSWindow(contentViewController: controller)
             window.title = "Settings"
             window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false
@@ -146,26 +138,43 @@ final class StatusItemController: NSObject {
         ])
     }
 
-    @objc private func selectPosition(_ sender: NSMenuItem) {
-        // The panel observes this setting and moves right away.
-        UserDefaults.standard.set(sender.representedObject as? String, forKey: PanelPosition.defaultsKey)
+    /// Lists installed instruments grouped by manufacturer, with the current one checked.
+    private func rebuildPluginMenu() {
+        host.refreshInstruments()
+        pluginMenu.removeAllItems()
+        let currentID = host.current?.id
+
+        let none = makeItem("None", #selector(selectPlugin(_:)))
+        none.representedObject = ""
+        none.state = currentID == nil ? .on : .off
+        pluginMenu.addItem(none)
+        pluginMenu.addItem(.separator())
+
+        let groups = Dictionary(grouping: host.instruments, by: \.manufacturer)
+        let manufacturers = groups.keys.sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+        for manufacturer in manufacturers {
+            let submenu = NSMenu()
+            var containsCurrent = false
+            for instrument in groups[manufacturer] ?? [] {
+                let item = makeItem(instrument.name, #selector(selectPlugin(_:)))
+                item.representedObject = instrument.id
+                if instrument.id == currentID {
+                    item.state = .on
+                    containsCurrent = true
+                }
+                submenu.addItem(item)
+            }
+            let parent = NSMenuItem(title: manufacturer, action: nil, keyEquivalent: "")
+            parent.submenu = submenu
+            parent.state = containsCurrent ? .on : .off
+            pluginMenu.addItem(parent)
+        }
     }
 
-    @objc private func toggleStartAtLogin() {
-        let service = SMAppService.mainApp
-        do {
-            if service.status == .enabled {
-                try service.unregister()
-            } else {
-                try service.register()
-            }
-        } catch {
-            NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.messageText = "Could not change Start at Login"
-            alert.informativeText = error.localizedDescription
-            alert.runModal()
-        }
+    @objc private func selectPlugin(_ sender: NSMenuItem) {
+        host.select(id: sender.representedObject as? String ?? "")
     }
 
     @objc private func quit() {

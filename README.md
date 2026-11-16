@@ -10,7 +10,7 @@ A macOS menu bar host for virtual instruments. It keeps one Audio Unit instrumen
 - The selected plugin and its patch are restored on launch
 - Global hotkey or MIDI command (note, CC or program change) to show or hide the editor
 - Listens on all MIDI inputs, or only the ones you pick
-- Selectable output device and buffer size
+- Selectable output device, output channel pair and buffer size
 - Start at Login
 
 ## Requirements
@@ -35,16 +35,15 @@ For daily use, copy `build/Constant.app` to `/Applications`. Start at Login poin
 | Action | Result |
 | --- | --- |
 | Left click the icon | Show or hide the plugin editor |
-| Right click the icon | Start at Login, Location, Settings, About, Quit |
+| Right click the icon | Instrument, Settings, About, Quit |
 
-**Location** sets where the editor appears: Top Right, Top Left, Center, Bottom Left or Bottom Right.
+**Instrument** picks the plugin to host, grouped by manufacturer. Switching plugins discards the previous plugin's patch.
 
-**Settings** covers:
+**Settings** has three tabs:
 
-- **Instrument** - which plugin to host. Switching plugins discards the previous plugin's patch.
-- **Show / Hide Plugin** - record a global hotkey, or learn a MIDI command. The learned MIDI message is not passed on to the instrument.
-- **Audio** - output device and buffer size.
-- **MIDI Inputs** - all inputs, or individual devices.
+- **General** - Start at Login, where the editor appears (Top Right, Top Left, Center, Bottom Left or Bottom Right), and the show/hide shortcuts: a global hotkey or a learned MIDI command. The learned MIDI message is not passed on to the instrument.
+- **Audio** - output device, output channel pair (on devices with more than two outputs) and buffer size.
+- **MIDI** - all inputs, or individual devices.
 
 ## Notes
 
