@@ -51,6 +51,9 @@ final class PluginPanelController {
         reposition()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        // macOS can refuse the activation when the trigger was a hotkey or MIDI message rather
+        // than a click on the app. Without this the panel would open behind the active app.
+        panel.orderFrontRegardless()
     }
 
     private func hide() {
