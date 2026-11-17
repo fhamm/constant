@@ -53,6 +53,9 @@ final class InstrumentHost: ObservableObject {
     @Published private(set) var outputChannelCount = 2
     /// Stereo pair the instrument plays on: 0 is channels 1-2, 1 is 3-4, and so on.
     @Published private(set) var outputPair = 0
+    /// Stops the audio engine so the instrument uses no CPU, but keeps it loaded with its state.
+    /// Not saved between launches.
+    @Published private(set) var isMuted = false
 
     nonisolated let midiSink = MIDISink()
 
@@ -176,6 +179,8 @@ final class InstrumentHost: ObservableObject {
         guard let unit else { return }
         midiSink.set(nil)
         engine.stop()
+        // Muted: leave the engine stopped so the plugin is not rendering.
+        guard !isMuted else { return }
         applyOutputSettings()
 
         let hardwareRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
@@ -254,6 +259,12 @@ final class InstrumentHost: ObservableObject {
         pairs[activeDeviceUID] = pair
         UserDefaults.standard.set(pairs, forKey: Self.pairsKey)
         applyChannelMap()
+    }
+
+    func setMuted(_ muted: Bool) {
+        guard muted != isMuted else { return }
+        isMuted = muted
+        startEngine()
     }
 
     func setBufferSize(_ frames: Int) {

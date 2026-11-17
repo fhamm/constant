@@ -14,6 +14,7 @@ final class StatusItemController: NSObject {
     private let pluginMenu = NSMenu()
     private var keyMonitor: Any?
     private let login = LoginItem()
+    private lazy var muteItem = makeItem("Mute", #selector(toggleMute), icon: "speaker.slash")
 
     init(host: InstrumentHost, midi: MIDIInput, shortcuts: ToggleShortcuts) {
         self.host = host
@@ -23,9 +24,6 @@ final class StatusItemController: NSObject {
         super.init()
 
         if let button = statusItem.button {
-            let image = NSImage(systemSymbolName: "pianokeys", accessibilityDescription: "Constant")
-            image?.isTemplate = true
-            button.image = image
             button.target = self
             button.action = #selector(clicked(_:))
             // React on mouse down, like native menu bar items.
@@ -35,6 +33,8 @@ final class StatusItemController: NSObject {
         let pluginItem = NSMenuItem(title: "Instrument", action: nil, keyEquivalent: "")
         pluginItem.submenu = pluginMenu
         setIcon("pianokeys", on: pluginItem)
+        menu.addItem(muteItem)
+        menu.addItem(.separator())
         menu.addItem(pluginItem)
         menu.addItem(.separator())
         menu.addItem(makeItem("Settings", #selector(openSettings), key: ",", icon: "gearshape"))
@@ -42,9 +42,14 @@ final class StatusItemController: NSObject {
         menu.addItem(.separator())
         menu.addItem(makeItem("Quit", #selector(quit), key: "q", icon: "power"))
 
-        shortcuts.onToggle = { [weak self] in
-            guard let self, let button = self.statusItem.button else { return }
-            self.panel.toggle(relativeTo: button)
+        shortcuts.onTrigger = { [weak self] action in
+            guard let self else { return }
+            switch action {
+            case .panel:
+                if let button = self.statusItem.button { self.panel.toggle(relativeTo: button) }
+            case .mute:
+                self.toggleMute()
+            }
         }
         host.onInstrumentChanged = { [weak self] in self?.instrumentChanged() }
 
@@ -75,8 +80,27 @@ final class StatusItemController: NSObject {
     }
 
     private func instrumentChanged() {
-        statusItem.button?.toolTip = host.current.map { "Constant - \($0.name)" } ?? "Constant"
+        updateIcon()
         panel.reload()
+    }
+
+    /// Shows the app's state in the menu bar icon and its tooltip.
+    private func updateIcon() {
+        let state: MenuBarIcon.State
+        if host.isMuted {
+            state = .muted
+        } else if host.isLoading {
+            state = .loading
+        } else if !host.isReady {
+            state = .noInstrument  // none selected, or it failed to load
+        } else {
+            state = .playing
+        }
+        statusItem.button?.image = MenuBarIcon.image(for: state)
+
+        var tip = host.current.map { "Constant - \($0.name)" } ?? "Constant"
+        if host.isMuted { tip += " (muted)" }
+        statusItem.button?.toolTip = tip
     }
 
     // MARK: - Actions
@@ -88,6 +112,7 @@ final class StatusItemController: NSObject {
 
         if isRightClick {
             rebuildPluginMenu()
+            muteItem.state = host.isMuted ? .on : .off
             // Attach the menu only for this click so left click keeps its own action.
             statusItem.menu = menu
             sender.performClick(nil)
@@ -185,6 +210,11 @@ final class StatusItemController: NSObject {
 
     @objc private func selectPlugin(_ sender: NSMenuItem) {
         host.select(id: sender.representedObject as? String ?? "")
+    }
+
+    @objc private func toggleMute() {
+        host.setMuted(!host.isMuted)
+        updateIcon()
     }
 
     @objc private func quit() {

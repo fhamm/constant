@@ -1,7 +1,18 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Watches incoming MIDI for the message bound to "show/hide plugin". Runs on the CoreMIDI thread.
+/// Something a hotkey or MIDI command can do. The raw value is also the Carbon hotkey ID.
+enum ShortcutAction: UInt32, CaseIterable, Sendable {
+    case panel = 1  // show/hide the plugin panel
+    case mute = 2   // mute/unmute the instrument
+
+    /// The panel keeps the original defaults keys so existing shortcuts survive the update.
+    func defaultsKey(_ base: String) -> String {
+        self == .panel ? base : base + "Mute"
+    }
+}
+
+/// Watches incoming MIDI for the messages bound to shortcut actions. Runs on the CoreMIDI thread.
 final class MIDITrigger: @unchecked Sendable {
     struct Binding: Equatable, Sendable {
         let status: UInt8  // message kind + channel
@@ -9,14 +20,14 @@ final class MIDITrigger: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private var binding: Binding?
-    private var learning = false
-    private var onTrigger: (@Sendable () -> Void)?
-    private var onLearned: (@Sendable (Binding) -> Void)?
+    private var bindings: [ShortcutAction: Binding] = [:]
+    private var learning: ShortcutAction?
+    private var onTrigger: (@Sendable (ShortcutAction) -> Void)?
+    private var onLearned: (@Sendable (ShortcutAction, Binding) -> Void)?
 
     func setCallbacks(
-        onTrigger: @escaping @Sendable () -> Void,
-        onLearned: @escaping @Sendable (Binding) -> Void
+        onTrigger: @escaping @Sendable (ShortcutAction) -> Void,
+        onLearned: @escaping @Sendable (ShortcutAction, Binding) -> Void
     ) {
         lock.lock()
         self.onTrigger = onTrigger
@@ -24,19 +35,19 @@ final class MIDITrigger: @unchecked Sendable {
         lock.unlock()
     }
 
-    func setBinding(_ newBinding: Binding?) {
+    func setBinding(_ newBinding: Binding?, for action: ShortcutAction) {
         lock.lock()
-        binding = newBinding
+        bindings[action] = newBinding
         lock.unlock()
     }
 
-    func setLearning(_ value: Bool) {
+    func setLearning(_ action: ShortcutAction?) {
         lock.lock()
-        learning = value
+        learning = action
         lock.unlock()
     }
 
-    /// Returns true when the message belongs to the trigger and must not reach the instrument.
+    /// Returns true when the message belongs to a trigger and must not reach the instrument.
     func handle(status: UInt8, data1: UInt8, data2: UInt8) -> Bool {
         let kind = status & 0xF0
         // A press: note on, controller above zero, or program change.
@@ -45,22 +56,23 @@ final class MIDITrigger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        if learning {
+        if let action = learning {
             guard isPress else { return false }
             let learned = Binding(status: status, data1: data1)
-            binding = learned
-            learning = false
-            onLearned?(learned)
+            bindings[action] = learned
+            learning = nil
+            onLearned?(action, learned)
             return true
         }
 
-        guard let binding, data1 == binding.data1 else { return false }
-        // Also swallow the note off that follows a bound note on.
-        let isNoteOff = binding.status & 0xF0 == 0x90 && status == binding.status - 0x10
-        guard status == binding.status || isNoteOff else { return false }
-
-        if isPress { onTrigger?() }
-        return true
+        for (action, binding) in bindings where data1 == binding.data1 {
+            // Also swallow the note off that follows a bound note on.
+            let isNoteOff = binding.status & 0xF0 == 0x90 && status == binding.status - 0x10
+            guard status == binding.status || isNoteOff else { continue }
+            if isPress { onTrigger?(action) }
+            return true
+        }
+        return false
     }
 }
 
@@ -70,21 +82,25 @@ struct HotKey: Equatable {
     let display: String
 }
 
-/// Global hotkey and MIDI command that show or hide the plugin panel.
+/// Global hotkeys and MIDI commands for the shortcut actions.
 @MainActor
 final class ToggleShortcuts: ObservableObject {
-    @Published private(set) var hotKey: HotKey?
-    @Published private(set) var hotKeyError: String?
-    @Published private(set) var isRecordingHotKey = false
-    @Published private(set) var midiBinding: MIDITrigger.Binding?
-    @Published private(set) var isLearningMIDI = false
+    @Published private(set) var hotKeys: [ShortcutAction: HotKey] = [:]
+    @Published private(set) var hotKeyErrors: [ShortcutAction: String] = [:]
+    /// The action whose hotkey is being recorded, if any.
+    @Published private(set) var recordingHotKey: ShortcutAction?
+    @Published private(set) var midiBindings: [ShortcutAction: MIDITrigger.Binding] = [:]
+    /// The action whose MIDI command is being learned, if any.
+    @Published private(set) var learningMIDI: ShortcutAction?
+
+    var isRecordingHotKey: Bool { recordingHotKey != nil }
 
     nonisolated let midiTrigger = MIDITrigger()
 
-    /// Called on the main thread when either shortcut fires.
-    var onToggle: (() -> Void)?
+    /// Called on the main thread when a shortcut fires.
+    var onTrigger: ((ShortcutAction) -> Void)?
 
-    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyRefs: [ShortcutAction: EventHotKeyRef] = [:]
     private var keyMonitor: Any?
 
     private static let keyCodeKey = "hotKeyCode"
@@ -95,55 +111,60 @@ final class ToggleShortcuts: ObservableObject {
 
     init() {
         let defaults = UserDefaults.standard
-        if let display = defaults.string(forKey: Self.displayKey) {
-            hotKey = HotKey(
-                keyCode: UInt32(defaults.integer(forKey: Self.keyCodeKey)),
-                modifiers: UInt32(defaults.integer(forKey: Self.modifiersKey)),
-                display: display)
-        }
-        if defaults.object(forKey: Self.midiStatusKey) != nil {
-            midiBinding = MIDITrigger.Binding(
-                status: UInt8(truncatingIfNeeded: defaults.integer(forKey: Self.midiStatusKey)),
-                data1: UInt8(truncatingIfNeeded: defaults.integer(forKey: Self.midiData1Key)))
+        for action in ShortcutAction.allCases {
+            if let display = defaults.string(forKey: action.defaultsKey(Self.displayKey)) {
+                hotKeys[action] = HotKey(
+                    keyCode: UInt32(defaults.integer(forKey: action.defaultsKey(Self.keyCodeKey))),
+                    modifiers: UInt32(defaults.integer(forKey: action.defaultsKey(Self.modifiersKey))),
+                    display: display)
+            }
+            if defaults.object(forKey: action.defaultsKey(Self.midiStatusKey)) != nil {
+                let binding = MIDITrigger.Binding(
+                    status: UInt8(truncatingIfNeeded:
+                        defaults.integer(forKey: action.defaultsKey(Self.midiStatusKey))),
+                    data1: UInt8(truncatingIfNeeded:
+                        defaults.integer(forKey: action.defaultsKey(Self.midiData1Key))))
+                midiBindings[action] = binding
+                midiTrigger.setBinding(binding, for: action)
+            }
         }
 
-        midiTrigger.setBinding(midiBinding)
         midiTrigger.setCallbacks(
-            onTrigger: { [weak self] in
-                DispatchQueue.main.async { self?.onToggle?() }
+            onTrigger: { [weak self] action in
+                DispatchQueue.main.async { self?.onTrigger?(action) }
             },
-            onLearned: { [weak self] binding in
-                DispatchQueue.main.async { self?.midiLearned(binding) }
+            onLearned: { [weak self] action, binding in
+                DispatchQueue.main.async { self?.midiLearned(binding, for: action) }
             })
 
         installHotKeyHandler()
-        registerHotKey()
+        registerHotKeys()
     }
 
     /// Stops any hotkey recording or MIDI learn in progress.
     func cancelCapture() {
-        if isRecordingHotKey {
+        if recordingHotKey != nil {
             stopKeyMonitor()
-            isRecordingHotKey = false
-            registerHotKey()
+            recordingHotKey = nil
+            registerHotKeys()
         }
-        if isLearningMIDI {
-            isLearningMIDI = false
-            midiTrigger.setLearning(false)
+        if learningMIDI != nil {
+            learningMIDI = nil
+            midiTrigger.setLearning(nil)
         }
     }
 
     // MARK: - Hotkey
 
-    func toggleHotKeyRecording() {
-        if isRecordingHotKey {
+    func toggleHotKeyRecording(for action: ShortcutAction) {
+        if recordingHotKey == action {
             cancelCapture()
             return
         }
         cancelCapture()
-        unregisterHotKey()  // so pressing the current shortcut records it instead of firing
-        hotKeyError = nil
-        isRecordingHotKey = true
+        unregisterHotKeys()  // so pressing a current shortcut records it instead of firing
+        hotKeyErrors[action] = nil
+        recordingHotKey = action
 
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let keyCode = event.keyCode
@@ -156,13 +177,13 @@ final class ToggleShortcuts: ObservableObject {
         }
     }
 
-    func clearHotKey() {
+    func clearHotKey(for action: ShortcutAction) {
         cancelCapture()
-        setHotKey(nil)
+        setHotKey(nil, for: action)
     }
 
     private func record(keyCode: UInt16, flags: NSEvent.ModifierFlags, characters: String?) {
-        guard isRecordingHotKey else { return }
+        guard let action = recordingHotKey else { return }
         let modifiers = flags.intersection([.command, .option, .control, .shift])
 
         if keyCode == UInt16(kVK_Escape), modifiers.isEmpty {
@@ -186,26 +207,34 @@ final class ToggleShortcuts: ObservableObject {
             ?? characters?.uppercased() ?? "Key \(keyCode)"
 
         stopKeyMonitor()
-        isRecordingHotKey = false
-        setHotKey(HotKey(keyCode: UInt32(keyCode), modifiers: carbon, display: display))
+        recordingHotKey = nil
+        let hotKey = HotKey(keyCode: UInt32(keyCode), modifiers: carbon, display: display)
+        // One key combination can only do one thing.
+        for other in ShortcutAction.allCases where other != action {
+            if let existing = hotKeys[other],
+               existing.keyCode == hotKey.keyCode, existing.modifiers == hotKey.modifiers {
+                setHotKey(nil, for: other)
+            }
+        }
+        setHotKey(hotKey, for: action)
     }
 
-    private func setHotKey(_ newHotKey: HotKey?) {
-        unregisterHotKey()
-        hotKey = newHotKey
-        hotKeyError = nil
+    private func setHotKey(_ newHotKey: HotKey?, for action: ShortcutAction) {
+        unregisterHotKeys()
+        hotKeys[action] = newHotKey
+        hotKeyErrors[action] = nil
 
         let defaults = UserDefaults.standard
         if let newHotKey {
-            defaults.set(Int(newHotKey.keyCode), forKey: Self.keyCodeKey)
-            defaults.set(Int(newHotKey.modifiers), forKey: Self.modifiersKey)
-            defaults.set(newHotKey.display, forKey: Self.displayKey)
+            defaults.set(Int(newHotKey.keyCode), forKey: action.defaultsKey(Self.keyCodeKey))
+            defaults.set(Int(newHotKey.modifiers), forKey: action.defaultsKey(Self.modifiersKey))
+            defaults.set(newHotKey.display, forKey: action.defaultsKey(Self.displayKey))
         } else {
-            defaults.removeObject(forKey: Self.keyCodeKey)
-            defaults.removeObject(forKey: Self.modifiersKey)
-            defaults.removeObject(forKey: Self.displayKey)
+            defaults.removeObject(forKey: action.defaultsKey(Self.keyCodeKey))
+            defaults.removeObject(forKey: action.defaultsKey(Self.modifiersKey))
+            defaults.removeObject(forKey: action.defaultsKey(Self.displayKey))
         }
-        registerHotKey()
+        registerHotKeys()
     }
 
     private func stopKeyMonitor() {
@@ -218,35 +247,46 @@ final class ToggleShortcuts: ObservableObject {
             eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         InstallEventHandler(
             GetApplicationEventTarget(),
-            { _, _, userData in
-                guard let userData else { return noErr }
+            { _, event, userData in
+                guard let event, let userData else { return noErr }
+                var hotKeyID = EventHotKeyID()
+                let status = GetEventParameter(
+                    event, EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID), nil,
+                    MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
+                guard status == noErr, let action = ShortcutAction(rawValue: hotKeyID.id) else {
+                    return noErr
+                }
                 let shortcuts = Unmanaged<ToggleShortcuts>.fromOpaque(userData).takeUnretainedValue()
-                DispatchQueue.main.async { shortcuts.onToggle?() }
+                DispatchQueue.main.async { shortcuts.onTrigger?(action) }
                 return noErr
             },
             1, &spec, Unmanaged.passUnretained(self).toOpaque(), nil)
     }
 
-    private func registerHotKey() {
-        guard let hotKey, hotKeyRef == nil else { return }
-        let id = EventHotKeyID(signature: OSType(0x434E_5354), id: 1)  // 'CNST'
-        let status = RegisterEventHotKey(
-            hotKey.keyCode, hotKey.modifiers, id, GetApplicationEventTarget(), 0, &hotKeyRef)
-        if status != noErr {
-            hotKeyRef = nil
-            hotKeyError = "This shortcut is already used by another app."
+    private func registerHotKeys() {
+        for (action, hotKey) in hotKeys where hotKeyRefs[action] == nil {
+            let id = EventHotKeyID(signature: OSType(0x434E_5354), id: action.rawValue)  // 'CNST'
+            var ref: EventHotKeyRef?
+            let status = RegisterEventHotKey(
+                hotKey.keyCode, hotKey.modifiers, id, GetApplicationEventTarget(), 0, &ref)
+            if status == noErr, let ref {
+                hotKeyRefs[action] = ref
+            } else {
+                hotKeyErrors[action] = "This shortcut is already used by another app."
+            }
         }
     }
 
-    private func unregisterHotKey() {
-        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
-        hotKeyRef = nil
+    private func unregisterHotKeys() {
+        for ref in hotKeyRefs.values { UnregisterEventHotKey(ref) }
+        hotKeyRefs = [:]
     }
 
     // MARK: - MIDI
 
-    var midiDescription: String? {
-        guard let binding = midiBinding else { return nil }
+    func midiDescription(for action: ShortcutAction) -> String? {
+        guard let binding = midiBindings[action] else { return nil }
         let channel = Int(binding.status & 0x0F) + 1
         switch binding.status & 0xF0 {
         case 0x90: return "Note \(binding.data1), channel \(channel)"
@@ -255,37 +295,41 @@ final class ToggleShortcuts: ObservableObject {
         }
     }
 
-    func toggleMIDILearn() {
-        if isLearningMIDI {
+    func toggleMIDILearn(for action: ShortcutAction) {
+        if learningMIDI == action {
             cancelCapture()
             return
         }
         cancelCapture()
-        isLearningMIDI = true
-        midiTrigger.setLearning(true)
+        learningMIDI = action
+        midiTrigger.setLearning(action)
     }
 
-    func clearMIDI() {
+    func clearMIDI(for action: ShortcutAction) {
         cancelCapture()
-        setMIDIBinding(nil)
+        setMIDIBinding(nil, for: action)
     }
 
-    private func midiLearned(_ binding: MIDITrigger.Binding) {
-        isLearningMIDI = false
-        setMIDIBinding(binding)
+    private func midiLearned(_ binding: MIDITrigger.Binding, for action: ShortcutAction) {
+        learningMIDI = nil
+        // One MIDI message can only do one thing.
+        for other in ShortcutAction.allCases where other != action && midiBindings[other] == binding {
+            setMIDIBinding(nil, for: other)
+        }
+        setMIDIBinding(binding, for: action)
     }
 
-    private func setMIDIBinding(_ binding: MIDITrigger.Binding?) {
-        midiBinding = binding
-        midiTrigger.setBinding(binding)
+    private func setMIDIBinding(_ binding: MIDITrigger.Binding?, for action: ShortcutAction) {
+        midiBindings[action] = binding
+        midiTrigger.setBinding(binding, for: action)
 
         let defaults = UserDefaults.standard
         if let binding {
-            defaults.set(Int(binding.status), forKey: Self.midiStatusKey)
-            defaults.set(Int(binding.data1), forKey: Self.midiData1Key)
+            defaults.set(Int(binding.status), forKey: action.defaultsKey(Self.midiStatusKey))
+            defaults.set(Int(binding.data1), forKey: action.defaultsKey(Self.midiData1Key))
         } else {
-            defaults.removeObject(forKey: Self.midiStatusKey)
-            defaults.removeObject(forKey: Self.midiData1Key)
+            defaults.removeObject(forKey: action.defaultsKey(Self.midiStatusKey))
+            defaults.removeObject(forKey: action.defaultsKey(Self.midiData1Key))
         }
     }
 

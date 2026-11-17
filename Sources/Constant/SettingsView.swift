@@ -46,6 +46,7 @@ struct SettingsView: View {
                 Text("General").tag("general")
                 Text("Audio").tag("audio")
                 Text("MIDI").tag("midi")
+                Text("Shortcuts").tag("shortcuts")
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -55,6 +56,7 @@ struct SettingsView: View {
             switch selectedTab {
             case "audio": audioTab
             case "midi": midiTab
+            case "shortcuts": shortcutsTab
             default: generalTab
             }
         }
@@ -85,37 +87,47 @@ struct SettingsView: View {
                     }
                 }
             }
+        }
+        .formStyle(.grouped)
+    }
 
-            Section("Show / Hide Plugin") {
-                LabeledContent("Hotkey") {
-                    HStack {
-                        Text(shortcuts.hotKey?.display ?? "None").foregroundStyle(.secondary)
-                        Button(shortcuts.isRecordingHotKey ? "Press keys..." : "Record") {
-                            shortcuts.toggleHotKeyRecording()
-                        }
-                        if shortcuts.hotKey != nil {
-                            Button("Clear") { shortcuts.clearHotKey() }
-                        }
+    private var shortcutsTab: some View {
+        Form {
+            shortcutSection("Show / Hide Plugin", for: .panel)
+            shortcutSection("Mute / Unmute", for: .mute)
+        }
+        .formStyle(.grouped)
+    }
+
+    private func shortcutSection(_ title: String, for action: ShortcutAction) -> some View {
+        Section(title) {
+            LabeledContent("Hotkey") {
+                HStack {
+                    Text(shortcuts.hotKeys[action]?.display ?? "None").foregroundStyle(.secondary)
+                    Button(shortcuts.recordingHotKey == action ? "Press keys..." : "Record") {
+                        shortcuts.toggleHotKeyRecording(for: action)
+                    }
+                    if shortcuts.hotKeys[action] != nil {
+                        Button("Clear") { shortcuts.clearHotKey(for: action) }
                     }
                 }
-                if let error = shortcuts.hotKeyError {
-                    Text(error).foregroundStyle(.red)
-                }
+            }
+            if let error = shortcuts.hotKeyErrors[action] {
+                Text(error).foregroundStyle(.red)
+            }
 
-                LabeledContent("MIDI command") {
-                    HStack {
-                        Text(shortcuts.midiDescription ?? "None").foregroundStyle(.secondary)
-                        Button(shortcuts.isLearningMIDI ? "Waiting for MIDI..." : "Learn") {
-                            shortcuts.toggleMIDILearn()
-                        }
-                        if shortcuts.midiBinding != nil {
-                            Button("Clear") { shortcuts.clearMIDI() }
-                        }
+            LabeledContent("MIDI command") {
+                HStack {
+                    Text(shortcuts.midiDescription(for: action) ?? "None").foregroundStyle(.secondary)
+                    Button(shortcuts.learningMIDI == action ? "Waiting for MIDI..." : "Learn") {
+                        shortcuts.toggleMIDILearn(for: action)
+                    }
+                    if shortcuts.midiBindings[action] != nil {
+                        Button("Clear") { shortcuts.clearMIDI(for: action) }
                     }
                 }
             }
         }
-        .formStyle(.grouped)
     }
 
     private var audioTab: some View {

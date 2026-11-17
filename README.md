@@ -11,6 +11,7 @@ A macOS menu bar host for virtual instruments. It keeps one Audio Unit instrumen
 - Audio keeps running while the editor is hidden
 - The selected plugin and its patch are restored on launch
 - Global hotkey or MIDI command (note, CC or program change) to show or hide the editor
+- Mute from the right-click menu, a hotkey or a MIDI command. Muting stops the plugin so it uses no CPU
 - Listens on all MIDI inputs, or only the ones you pick
 - Selectable output device, output channel pair and buffer size
 - Start at Login
@@ -60,6 +61,8 @@ git tag v0.1.0 && git push origin v0.1.0
 
 Pushing a `v*` tag runs the Release workflow, which builds a universal disk image, takes the version from the tag and publishes it as a GitHub release.
 
+Before tagging, add a `## <version>` section to `CHANGELOG.md`. It becomes the release notes, and the workflow fails if the section is missing.
+
 ## Usage
 
 | Action | Result |
@@ -71,9 +74,10 @@ Pushing a `v*` tag runs the Release workflow, which builds a universal disk imag
 
 **Settings** has three tabs:
 
-- **General** - Start at Login, where the editor appears (Top Right, Top Left, Center, Bottom Left or Bottom Right), and the show/hide shortcuts: a global hotkey or a learned MIDI command. The learned MIDI message is not passed on to the instrument.
+- **General** - Start at Login and where the editor appears (Top Right, Top Left, Center, Bottom Left or Bottom Right).
 - **Audio** - output device, output channel pair (on devices with more than two outputs) and buffer size.
 - **MIDI** - all inputs, or individual devices.
+- **Shortcuts** - show/hide and mute: a global hotkey or a learned MIDI command for each. The learned MIDI messages are not passed on to the instrument.
 
 ## Notes
 
@@ -88,8 +92,9 @@ Pushing a `v*` tag runs the Release workflow, which builds a universal disk imag
 | `InstrumentHost.swift` | Audio engine, plugin loading, session save and restore |
 | `PluginPanelController.swift` | The panel that shows the plugin editor |
 | `StatusItemController.swift` | Menu bar icon, context menu, Settings window |
+| `MenuBarIcon.swift` | Menu bar icon variants (muted, loading, no instrument) |
 | `MIDIInput.swift` | MIDI device handling and message forwarding |
-| `ToggleShortcuts.swift` | Global hotkey and MIDI show/hide trigger |
+| `ToggleShortcuts.swift` | Global hotkeys and MIDI triggers for show/hide and mute |
 | `AudioDevices.swift` | Output device listing and buffer size |
 | `SettingsView.swift` | Settings UI |
 
