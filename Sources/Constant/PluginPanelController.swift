@@ -42,7 +42,8 @@ final class PluginPanelController {
         anchor = view
         if panel.isVisible {
             hide()
-        } else {
+        } else if host.current != nil {
+            // With no instrument selected there is nothing to show.
             show()
         }
     }
@@ -69,11 +70,14 @@ final class PluginPanelController {
         let token = reloadToken
         clearPluginView()
 
-        if host.isLoading {
+        if host.current == nil {
+            // "None" selected: close the panel instead of showing an empty box.
+            panel.orderOut(nil)
+            panel.contentView = nil
+        } else if host.isLoading {
             showMessage("Loading \(host.current?.name ?? "plugin")...")
         } else if !host.isReady {
-            showMessage(host.errorMessage
-                ?? "No instrument selected.\nRight click the menu bar icon to choose one.")
+            showMessage(host.errorMessage ?? "Could not load \(host.current?.name ?? "the plugin").")
         } else {
             host.requestViewController { [weak self] viewController in
                 guard let self, token == self.reloadToken else { return }

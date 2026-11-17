@@ -2,6 +2,10 @@
 
 Each `## <version>` section becomes the notes of the matching GitHub release.
 
+## 1.1.1 - 2026-11-17
+
+- With no instrument selected, the plugin panel no longer opens as an empty box.
+
 ## 1.1 - 2026-11-17
 
 - Mute: new item at the top of the right-click menu. Muting stops the plugin, so it uses no CPU, and keeps it loaded with its patch.
